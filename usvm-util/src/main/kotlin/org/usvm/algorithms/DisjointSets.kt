@@ -120,6 +120,18 @@ class DisjointSets<T> private constructor(
         return result
     }
 
+    fun overlap(other: DisjointSets<T>): DisjointSets<T> {
+        val overLap = DisjointSets<T>()
+
+        for ((key, parentKey) in parent) {
+            if (find(key) == other.find(key)) {
+                overLap.union(key, parentKey)
+            }
+        }
+
+        return overLap
+    }
+
     /**
      * Determines what values should be selected as representative during merging.
      */
