@@ -9,6 +9,7 @@ import org.usvm.UContext
 import org.usvm.UHeapRef
 import org.usvm.UNullRef
 import org.usvm.USymbolicHeapRef
+import org.usvm.algorithms.separate
 import org.usvm.isStatic
 import org.usvm.isStaticHeapRef
 import org.usvm.memory.mapWithStaticAsConcrete
@@ -458,11 +459,34 @@ class UTypeConstraints<Type>(
      */
     override fun mergeWith(other: UTypeConstraints<Type>, by: MutableMergeGuard): UTypeConstraints<Type>? {
         // TODO: should we check equality constraints?
-        if (symbolicRefToTypeRegion != other.symbolicRefToTypeRegion) {
-            return null
+        val (overlap, onlyThis, onlyOthers) = symbolicRefToTypeRegion.separate(other.symbolicRefToTypeRegion)
+
+        val thisConstraints = mutableListOf<UBoolExpr>()
+        val otherConstraints = mutableListOf<UBoolExpr>()
+
+        for ((ref, region) in onlyThis) {
+            for (subtype in region.subtypes) {
+                thisConstraints += ctx.mkIsSubtypeExpr(ref, subtype)
+            }
+            for (supertype in region.supertypes) {
+                thisConstraints += ctx.mkIsSupertypeExpr(ref, supertype)
+            }
         }
+
+        for ((ref, region) in onlyOthers) {
+            for (subtype in region.subtypes) {
+                otherConstraints += ctx.mkIsSubtypeExpr(ref, subtype)
+            }
+            for (supertype in region.supertypes) {
+                otherConstraints += ctx.mkIsSupertypeExpr(ref, supertype)
+            }
+        }
+
+        by.appendThis(thisConstraints.asSequence())
+        by.appendThis(otherConstraints.asSequence())
+
         val mergedConcreteRefs = concreteRefToType.builder().apply { putAll(other.concreteRefToType) }.build()
-        return UTypeConstraints(typeSystem, equalityConstraints, mergedConcreteRefs, symbolicRefToTypeRegion)
+        return UTypeConstraints(typeSystem, equalityConstraints, mergedConcreteRefs, overlap)
     }
 
 
