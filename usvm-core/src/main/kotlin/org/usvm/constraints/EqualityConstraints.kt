@@ -428,110 +428,31 @@ class UEqualityConstraints private constructor(
         val onlyThisConstraints = mutableListOf<UBoolExpr>()
         val onlyOtherConstraints = mutableListOf<UBoolExpr>()
 
-        val processedConstraints = mutableSetOf<Pair<UHeapRef, UHeapRef>>()
+        val thisProcessedConstraints = mutableSetOf<Pair<UHeapRef, UHeapRef>>()
+        val otherProcessedConstraints = mutableSetOf<Pair<UHeapRef, UHeapRef>>()
 
         val (overlapReferenceDisequalities, thisReferenceDisequalities, otherReferenceDisequalities) =
             mutableReferenceDisequalities.build().separate(other.mutableReferenceDisequalities.build())
 
-        for ((ref1, refSet) in thisReferenceDisequalities) {
-            for (ref2 in refSet) {
-                if (!processedConstraints.contains(ref2 to ref1)) {
-                    processedConstraints.add(ref1 to ref2)
-                    onlyThisConstraints += ctx.mkNotNoSimplify(ctx.mkEqNoSimplify(ref1, ref2))
-                }
-            }
-        }
-
-        for ((ref1, refSet) in otherReferenceDisequalities) {
-            for (ref2 in refSet) {
-                if (!processedConstraints.contains(ref2 to ref1)) {
-                    processedConstraints.add(ref1 to ref2)
-                    onlyOtherConstraints += ctx.mkNotNoSimplify(ctx.mkEqNoSimplify(ref1, ref2))
-                }
-            }
-        }
-
+        mgReferenceDisequalities(thisReferenceDisequalities, onlyThisConstraints, thisProcessedConstraints)
+        mgReferenceDisequalities(otherReferenceDisequalities, onlyOtherConstraints, otherProcessedConstraints)
 
         val (overlapNullableDisequalities, thisNullableDisequalities, otherNullableDisequalities) =
             mutableNullableDisequalities.build().separate(other.mutableNullableDisequalities.build())
 
-        for ((ref1, refSet) in thisNullableDisequalities) {
-            for (ref2 in refSet) {
-                if (!processedConstraints.contains(ref2 to ref1)) {
-                    processedConstraints.add(ref1 to ref2)
-
-                    val disequalityConstraint = ctx.mkNotNoSimplify(
-                        ctx.mkEqNoSimplify(ref1, ref2)
-                    )
-                    val nullConstraint1 = ctx.mkEqNoSimplify(ref1, ctx.nullRef)
-                    val nullConstraint2 = ctx.mkEqNoSimplify(ref2, ctx.nullRef)
-                    onlyThisConstraints += ctx.mkOrNoSimplify(
-                        disequalityConstraint,
-                        ctx.mkAndNoSimplify(nullConstraint1, nullConstraint2)
-                    )
-                }
-            }
-        }
-
-        for ((ref1, refSet) in otherNullableDisequalities) {
-            for (ref2 in refSet) {
-                if (!processedConstraints.contains(ref2 to ref1)) {
-                    processedConstraints.add(ref1 to ref2)
-
-                    val disequalityConstraint = ctx.mkNotNoSimplify(
-                        ctx.mkEqNoSimplify(ref1, ref2)
-                    )
-                    val nullConstraint1 = ctx.mkEqNoSimplify(ref1, ctx.nullRef)
-                    val nullConstraint2 = ctx.mkEqNoSimplify(ref2, ctx.nullRef)
-                    onlyOtherConstraints += ctx.mkOrNoSimplify(
-                        disequalityConstraint,
-                        ctx.mkAndNoSimplify(nullConstraint1, nullConstraint2)
-                    )
-                }
-            }
-        }
+        mgNullableDisequalities(thisNullableDisequalities, onlyThisConstraints, thisProcessedConstraints)
+        mgNullableDisequalities(otherNullableDisequalities, onlyOtherConstraints, otherProcessedConstraints)
 
         val (overlapDistinctReferences, thisDistinctReferences, otherDistinctReferences) =
             mutableDistinctReferences.build().separate(other.mutableDistinctReferences.build())
 
-        val nullRepr = findRepresentative(ctx.nullRef)
-        var index = 0
-
-        for (ref in thisDistinctReferences) {
-            // Static refs are already translated as a values of an uninterpreted sort
-            if (isStaticHeapRef(ref)) {
-                continue
-            }
-
-            val refIndex = if (ref == nullRepr) 0 else index++
-            val preInterpretedValue = ctx.mkUninterpretedSortValue(ctx.addressSort, refIndex)
-            onlyThisConstraints += ctx.mkEqNoSimplify(ref, preInterpretedValue)
-        }
-
-        for (ref in otherDistinctReferences) {
-            // Static refs are already translated as a values of an uninterpreted sort
-            if (isStaticHeapRef(ref)) {
-                continue
-            }
-
-            val refIndex = if (ref == nullRepr) 0 else index++
-            val preInterpretedValue = ctx.mkUninterpretedSortValue(ctx.addressSort, refIndex)
-            onlyOtherConstraints += ctx.mkEqNoSimplify(ref, preInterpretedValue)
-        }
+        mgDistinctReferences(thisDistinctReferences, onlyThisConstraints)
+        mgDistinctReferences(otherDistinctReferences, onlyOtherConstraints)
 
         val overlapEqualReferences = equalReferences.overlap(other.equalReferences)
 
-        for ((key, value) in equalReferences) {
-            if (!other.equalReferences.connected(key, value)) {
-                onlyThisConstraints += ctx.mkEqNoSimplify(key, value)
-            }
-        }
-
-        for ((key, value) in other.equalReferences) {
-            if (!equalReferences.connected(key, value)) {
-                onlyOtherConstraints += ctx.mkEqNoSimplify(key, value)
-            }
-        }
+        mgEqualReferences(equalReferences, other.equalReferences, onlyThisConstraints)
+        mgEqualReferences(other.equalReferences, equalReferences, onlyOtherConstraints)
 
         by.appendThis(onlyThisConstraints.asSequence())
         by.appendOther(onlyOtherConstraints.asSequence())
@@ -543,6 +464,66 @@ class UEqualityConstraints private constructor(
             overlapReferenceDisequalities,
             overlapNullableDisequalities,
         )
+    }
+
+    private fun mgReferenceDisequalities(refs: PersistentMultiMap<UHeapRef, UHeapRef>,
+                            constraints: MutableList<UBoolExpr>,
+                            processedConstraints: MutableSet<Pair<UHeapRef, UHeapRef>>) {
+        for ((ref1, refSet) in refs) {
+            for (ref2 in refSet) {
+                if (!processedConstraints.contains(ref2 to ref1)) {
+                    processedConstraints.add(ref1 to ref2)
+                    constraints += ctx.mkNotNoSimplify(ctx.mkEqNoSimplify(ref1, ref2))
+                }
+            }
+        }
+    }
+
+    private fun mgNullableDisequalities(refs: PersistentMultiMap<UHeapRef, UHeapRef>,
+                            constraints: MutableList<UBoolExpr>,
+                            processedConstraints: MutableSet<Pair<UHeapRef, UHeapRef>>) {
+        for ((ref1, refSet) in refs) {
+            for (ref2 in refSet) {
+                if (!processedConstraints.contains(ref2 to ref1)) {
+                    processedConstraints.add(ref1 to ref2)
+
+                    val disequalityConstraint = ctx.mkNotNoSimplify(
+                        ctx.mkEqNoSimplify(ref1, ref2)
+                    )
+                    val nullConstraint1 = ctx.mkEqNoSimplify(ref1, ctx.nullRef)
+                    val nullConstraint2 = ctx.mkEqNoSimplify(ref2, ctx.nullRef)
+                    constraints += ctx.mkOrNoSimplify(
+                        disequalityConstraint,
+                        ctx.mkAndNoSimplify(nullConstraint1, nullConstraint2)
+                    )
+                }
+            }
+        }
+    }
+
+    private fun mgDistinctReferences(refs: PersistentSet<UHeapRef>,
+                                      constraints: MutableList<UBoolExpr>) {
+        val nullRepr = findRepresentative(ctx.nullRef)
+        var index = 0
+
+        for (ref in refs) {
+            if (isStaticHeapRef(ref)) {
+                continue
+            }
+            val refIndex = if (ref == nullRepr) 0 else index++
+            val preInterpretedValue = ctx.mkUninterpretedSortValue(ctx.addressSort, refIndex)
+            constraints += ctx.mkEqNoSimplify(ref, preInterpretedValue)
+        }
+    }
+
+    private fun mgEqualReferences(trueEquality: DisjointSets<UHeapRef>,
+                                  falseEquality: DisjointSets<UHeapRef>,
+                                  constraints: MutableList<UBoolExpr>) {
+        for ((key, value) in trueEquality) {
+            if (!falseEquality.connected(key, value)) {
+                constraints += ctx.mkEqNoSimplify(key, value)
+            }
+        }
     }
 
     fun constraints(translator: UExprTranslator<*, *>): Sequence<UBoolExpr> {
